@@ -1,3 +1,14 @@
+# ---------------- SIG-LSTM ----------------
+
+import matplotlib
+matplotlib.use("TkAgg")  # ou "Agg" si tu ne veux pas d'interface graphique
+import matplotlib.pyplot as plt
+
+import numpy as np
+import torch
+import torch.nn as nn
+import iisignature
+import matplotlib.pyplot as plt
 import math
 import torch
 from torch import nn
@@ -12,97 +23,117 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-
-
-#### SIG LSTM ######
-
-
-
-# ----------------SIG LSTM ----------------
-
-class SIG_LSTM(nn.Module):
-    def __init__(self, in_size, hidden_size,level, device='cpu'):
+class SIG_LSTM1(nn.Module):
+    def __init__(self, in_size, hidden_size, level, device='cpu'):
         super().__init__()
         self.device = device
         self.in_size = in_size
         self.hidden_size = hidden_size
         self.level = level
-        # Calculate signature dimension based on effective input channels (x + time)
-        actual_input_channels_for_signature = in_size + 1 # +1 for time dimension
-        self.signature_dim = signatory.signature_channels(actual_input_channels_for_signature, level)
-
-        self.params = {
-            'Wha': torch.randn(hidden_size, hidden_size * 3) / np.sqrt(hidden_size),
-            'Wxa': torch.randn(in_size, hidden_size * 3) / np.sqrt(in_size),
-            'ba':  torch.zeros(hidden_size * 3)
-        }
-        self.params = {k: v.to(device) for k, v in self.params.items()}
-
-        self.param1 = {
-            # Wf now uses the corrected signature_dim
-            'Wf': torch.randn(self.signature_dim, hidden_size) / np.sqrt(hidden_size),
-            'baf': torch.zeros(hidden_size)
-        }
+        
+        # Poids pour LSTM classique
+        self.Wha = nn.Parameter(torch.randn(hidden_size, hidden_size * 3) / np.sqrt(hidden_size))
+        self.Wxa = nn.Parameter(torch.randn(in_size, hidden_size * 3) / np.sqrt(in_size))
+        self.ba = nn.Parameter(torch.zeros(hidden_size * 3))
+        
+        # Calcul dimension signature
+        actual_input_channels = in_size + 1  # +1 pour le temps
+        self.signature_dim = iisignature.siglength(actual_input_channels, level)
+        
+        # Poids pour la signature
+        self.Wf = nn.Parameter(torch.randn(self.signature_dim, hidden_size) / np.sqrt(hidden_size))
+        self.bf = nn.Parameter(torch.zeros(hidden_size))
 
     def forward(self, x):
         N, T, I = x.shape
         H = self.hidden_size
-        self.cache = []
         h = [torch.zeros([N, H], device=self.device)]
         c_prev = torch.zeros([N, H], device=self.device)
-
-        # Generate time tensor and concatenate with input x
-        # time should go from 0 to 1 over T points
-        time_points = torch.linspace(0, 1, T).unsqueeze(0).unsqueeze(2).repeat(N, 1, 1).to(self.device)
-        # The full path for signature calculation will be (time, x)
-        full_path = torch.cat([time_points, x], dim=2) # Shape (N, T, I+1)
-
+        
+        # Tensor temps
+        time_points = torch.linspace(0, 1, T, device=self.device).unsqueeze(0).unsqueeze(2).repeat(N, 1, 1)
+        full_path = torch.cat([time_points, x], dim=2)  # shape (N, T, I+1)
+        
         for t in range(T):
-            xt=x[:, t] # Current input from x
-            # path0_t for signature must have at least 2 points
+            x_t = x[:, t, :]
+            
+            # Path jusqu'au temps courant
             if t == 0:
-                # For the first step, duplicate the first point of the full_path
-                x0t = torch.cat([full_path[:,0,:].unsqueeze(1), full_path[:,0,:].unsqueeze(1)], dim=1)
-                # print(f"DEBUG: t={t}, x0t shape (if t==0 branch): {x0t.shape}") # Debug line
+                x0t = full_path[:, 0:1, :].repeat(1, 2, 1)  # dupliquer le 1er point
             else:
-                # Take path from beginning up to current timestep
-                x0t=full_path[:, :t+1, :]
-                # print(f"DEBUG: t={t}, x0t shape (else branch): {x0t.shape}") # Debug line
-
-            next_h, c_prev, cache_t = self.forward_step(xt, x0t, h[t], c_prev)
-            h.append(next_h)
-            self.cache.append(cache_t)
-
+                x0t = full_path[:, :t+1, :]
+            
+            # Signature iisignature
+            sig = iisignature.sig(x0t.detach().cpu().numpy(), self.level)
+            sig = torch.from_numpy(sig).float().to(self.device) / x0t.size(1)
+            
+            # LSTM classique
+            a = torch.matmul(x_t, self.Wxa) + torch.matmul(h[t], self.Wha) + self.ba
+            i_gate, o_gate, g_gate = torch.split(a, H, dim=1)
+            f_gate = torch.matmul(sig, self.Wf) + self.bf
+            
+            i = torch.sigmoid(i_gate)
+            f = torch.sigmoid(f_gate)
+            o = torch.sigmoid(o_gate)
+            g = torch.tanh(g_gate)
+            c_next = f * c_prev + i * g
+            h_next = o * torch.tanh(c_next)
+            
+            h.append(h_next)
+            c_prev = c_next
+        
         h_out = torch.stack(h[1:], dim=1)
-        self.h = h_out
-        self.c = c_prev
         return h_out
 
-    def forward_step(self, x_t, x0_t, h_prev, c_prev):
-
-        Signature = signatory.signature(x0_t, self.level)/x0_t.size(1)
-        H = self.hidden_size
-        a = torch.matmul(x_t, self.params['Wxa']) + torch.matmul(h_prev, self.params['Wha']) + self.params['ba']
-        i_gate, o_gate, g_gate = torch.split(a, H, dim=1)
-        f_gate = torch.matmul(Signature, self.param1['Wf']) + self.param1['baf'] # This is where the error occurred
-
-        i = torch.sigmoid(i_gate)
-        f = torch.sigmoid(f_gate)
-        o = torch.sigmoid(o_gate)
-        g = torch.tanh(g_gate)
-        c_next = f * c_prev + i * g
-        h_next = o * torch.tanh(c_next)
-        cache = (h_next, h_prev, c_next, c_prev, i, f, o, g, x_t)
-        return h_next, c_next, cache
-
-    # ---------------- SIG LSTM avec prédiction ----------------
+# ---------------- Modèle prédiction ----------------
 class SIG_LSTM_Predictor(nn.Module):
     def __init__(self, in_size, hidden_size, out_size, level, device='cpu'):
         super().__init__()
-        self.Sig_lstm = SIG_LSTM(in_size, hidden_size, level, device=device)
+        self.sig_lstm = SIG_LSTM1(in_size, hidden_size, level, device=device)
         self.output_layer = nn.Linear(hidden_size, out_size)
 
     def forward(self, x):
-        h_out = self.Sig_lstm(x)          # (N, T-1, H)
+        h_out = self.sig_lstm(x)
         y_pred = self.output_layer(h_out)
         return y_pred
+
+# ---------------- Simulation mouvement brownien ----------------
+if __name__ == "__main__":
+    np.random.seed(1)
+    T = 50
+    delta_t = 1.0 / T
+    dW = np.random.randn(T) * np.sqrt(delta_t)
+    W = np.cumsum(dW)
+    
+    X = torch.tensor(W[:-1], dtype=torch.float32).unsqueeze(0).unsqueeze(2)  # (1, T-1, 1)
+    y_true = torch.tensor(W[1:], dtype=torch.float32).unsqueeze(0).unsqueeze(2)
+    
+    # ---------------- Modèle ----------------
+    model = SIG_LSTM_Predictor(in_size=1, hidden_size=16, out_size=1, level=2, device='cpu')
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    
+    # ---------------- Entraînement ----------------
+    epochs = 200
+    for epoch in range(epochs):
+        optimizer.zero_grad()
+        y_pred = model(X)
+        loss = criterion(y_pred, y_true)
+        loss.backward()
+        optimizer.step()
+        if (epoch+1) % 20 == 0:
+            print(f"Epoch {epoch+1}/{epochs}, Loss: {loss.item():.6f}")
+    
+    # ---------------- Prédiction ----------------
+    y_pred = model(X).detach().squeeze().numpy()
+    
+    # ---------------- Visualisation ----------------
+    plt.figure(figsize=(8,5))
+    time = np.linspace(0, 1, T-1)
+    plt.plot(time, y_true.squeeze().numpy(), label="Vraie trajectoire", color='blue')
+    plt.plot(time, y_pred, label="Trajectoire prédite", color='red', linestyle='--')
+    plt.xlabel("Temps")
+    plt.ylabel("W_t")
+    plt.title("Prédiction d'un mouvement brownien avec SIG-LSTM")
+    plt.legend()
+    plt.show()
