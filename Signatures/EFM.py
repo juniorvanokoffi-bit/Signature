@@ -21,5 +21,28 @@ class EFMs:
         if self.signature_fm is None:
             print("Signature FM non calculée.")
         else:
-            print(self.signature_fm[:n])
+            print( self.signature_fm[:] )
 
+
+# -------------------------------
+# Exemple d'utilisation
+# -------------------------------
+
+path = np.array([
+    [0.0, 0.0, 0.0],
+    [1.0, 2.0, 3.0],
+    [1.0, 2.0, 3.0]
+])
+
+trunc =2                                 # niveau de troncature
+t_grid = np.linspace(0, 1, len(path))     # grille de temps
+lam = 0.1                                 # paramètre lambda
+
+# Créer une instance
+efm_instance = EFMs(path, trunc, t_grid, lam)
+
+# Calculer la signature
+efm_instance.calculer()
+# Afficher les 10 premiers éléments
+E=efm_instance.signature_fm
+print(E[:,-1])

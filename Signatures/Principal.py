@@ -3,8 +3,9 @@ if __name__ == "__main__":
     import torch
     import iisignature
     from Sig_classic import SignatureClassique
+    from EFM import EFMs
 
-    path = np.array([[0, 0], [1, 2], [2, 1]])
+   
     T = 50
     delta_t = 1.0 / T
 
@@ -23,13 +24,18 @@ if __name__ == "__main__":
 
     trunc = 2
 
+    path = np.array([
+    [0.0, 0.0, 0.0],
+    [1.0, 2.0, 3.0],
+    [1.0, 2.0, 3.0]])
+
     # Signature classique avec ta classe
     manager = SignatureClassique(X, trunc)
     sig = manager.calculer()
 
     # Signature classique avec iisignature
     sig1 = iisignature.sig(full_path.numpy(), trunc)
-
+    sig2 = iisignature.sig(path, trunc)
     print("Signature classique (iisignature) :")
-    print(sig1)
+    print(sig2)
 
