@@ -1,6 +1,9 @@
 __pycache__/
 *.pyc
 Lstm_sig/
+test.py
+EFM.py
+Principal.py
 # Dossiers Python temporaires
 __pycache__/
 env/
